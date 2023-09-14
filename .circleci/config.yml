@@ -1,0 +1,112 @@
+version: 2.1
+
+orbs:
+  go: circleci/go@1.7.1
+  docker: circleci/docker@2.0.3
+  aws-eks: circleci/aws-eks@2.2.0
+  kubernetes: circleci/kubernetes@1.3
+jobs:
+  lint:
+    docker:
+      - image: golangci/golangci-lint:v1.37-alpine
+    steps:
+      - checkout
+      - run: golangci-lint run
+    environment:
+      GO111MODULE: "off"
+  build-and-push:
+    parameters:
+      user:
+        description: Name of Docker Hub user environment variable
+        default: DOCKER_USER
+        type: env_var_name
+      token:
+        description: Name of Docker Hub token environment variable
+        default: DOCKER_PASSWORD
+        type: env_var_name
+    environment:
+      DOCKER_IMAGE: ngocnt91/udacity-capstone
+      DOCKER_TAG: latest
+    executor: docker/docker
+
+    steps:
+      - setup_remote_docker:
+          version: 19.03.13
+          docker_layer_caching: true
+      - checkout
+      - run:
+          name: Docker Login
+          command: |
+            echo "${<< parameters.token >>}" \
+              | docker login -u "${<< parameters.user >>}" --password-stdin
+      - docker/build:
+          image: $DOCKER_IMAGE
+          tag: $DOCKER_TAG
+      - run:
+          name: Push Image
+          command: |
+            TAG=${CIRCLE_SHA1}
+            echo "Container image tag: $TAG"
+            docker tag $DOCKER_IMAGE:$DOCKER_TAG $DOCKER_IMAGE:$TAG
+            docker push $DOCKER_IMAGE:$TAG
+  create-deployment:
+    docker:
+      - image: cimg/python:3.10
+    parameters:
+      cluster-name:
+        description: |
+          Name of the EKS cluster
+        type: string
+      image-name:
+        description: |
+          Name of the docker image to be deployed
+        type: string
+      role-name:
+        description: |
+          Name of Role EKS
+        type: string
+      aws-region:
+        description: |
+          AWS region
+        type: string
+        default: us-east-1
+    steps:
+      - checkout
+      - run:
+          name: Create deployment manifest
+          command: |
+            # Replace the placeholders in the manifest with the intended values.
+            # This is to avoid hardcoding the image name in the manifest, to make this
+            # Capstone project more portable.
+            cat manifests/deploy.yaml.template |\
+            sed "s|DOCKER_IMAGE_NAME|<< parameters.image-name >>|g;" > manifests/deploy.yaml
+      - aws-eks/update-kubeconfig-with-authenticator:
+          cluster-name: << parameters.cluster-name >>
+          install-kubectl: true
+          aws-region: << parameters.aws-region >>
+          cluster-authentication-role-arn: << parameters.role-name >>
+      - kubernetes/create-or-update-resource:
+          get-rollout-status: true
+          resource-file-path: manifests/deploy.yaml
+          resource-name: deployment/udacity-capstone
+      - kubernetes/create-or-update-resource:
+          resource-file-path: manifests/service.yaml
+
+workflows:
+  BuildAndDeployEKS:
+    jobs:
+      - lint
+      - build-and-push:
+          context:
+            - udacity_aws
+          requires:
+            - lint
+      - create-deployment:
+          cluster-name: EksClusterStack
+          aws-region: $AWS_DEFAULT_REGION
+          role-name: $AWS_EKS_ROLE
+          image-name: "docker.io/ngocnt91/udacity-capstone:${CIRCLE_SHA1}"
+          context:
+            - udacity_aws
+          requires:
+            - build-and-push

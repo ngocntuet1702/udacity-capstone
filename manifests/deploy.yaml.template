@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: udacity-capstone
+  labels:
+    app: udacity-capstone
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: udacity-capstone
+  template:
+    metadata:
+      name: udacity-capstone
+      labels:
+        app: udacity-capstone
+    spec:
+      containers:
+        - name: udacity-capstone
+          image: DOCKER_IMAGE_NAME
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3333
+      restartPolicy: Always
